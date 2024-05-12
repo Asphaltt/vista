@@ -21,6 +21,9 @@ const (
 	progNameKprobeIptDoTable    = "kprobe_ipt_do_table"
 	progNameKprobeIptDoTableOld = "kprobe_ipt_do_table_old"
 	progNameKretprobeIptDoTable = "kretprobe_ipt_do_table"
+
+	progNameKprobeNfHookSlow = "kprobe_nf_hook_slow"
+	progNameKretprobeNfHook  = "kretprobe_nf_hook_slow"
 )
 
 type iptablesKprober struct {
@@ -82,6 +85,18 @@ func KprobeIptables(coll *ebpf.Collection) *iptablesKprober {
 	krp, err := link.Kretprobe("ipt_do_table", coll.Programs[progNameKretprobeIptDoTable], nil)
 	if err != nil {
 		log.Fatalf("Opening kretprobe ipt_do_table: %v\n", err)
+	}
+	t.links = append(t.links, krp)
+
+	kp, err := link.Kprobe("nf_hook_slow", coll.Programs[progNameKprobeNfHookSlow], nil)
+	if err != nil {
+		log.Fatalf("Opening kprobe nf_hook_slow: %v\n", err)
+	}
+	t.links = append(t.links, kp)
+
+	krp, err = link.Kretprobe("nf_hook_slow", coll.Programs[progNameKretprobeNfHook], nil)
+	if err != nil {
+		log.Fatalf("Opening kretprobe nf_hook_slow: %v\n", err)
 	}
 	t.links = append(t.links, krp)
 

@@ -58,6 +58,10 @@ func InjectPcapFilter(spec *ebpf.CollectionSpec, f *Flags) {
 	}
 
 	if f.FilterTraceIptables {
-		injectPcapFilter(spec, []string{progNameKprobeIptDoTable, progNameKprobeIptDoTableOld}, f)
+		injectPcapFilter(spec, []string{
+			progNameKprobeIptDoTable,
+			progNameKprobeIptDoTableOld,
+			progNameKprobeNfHookSlow,
+		}, f)
 	}
 }

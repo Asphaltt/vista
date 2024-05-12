@@ -655,8 +655,10 @@ int BPF_PROG(fentry_xdp, struct xdp_buff *xdp) {
 
 static __always_inline void
 set_iptables(struct xt_table *table, struct nf_hook_state *state, u32 verdict,
-			 u64 delay, struct iptables_meta *iptables) {
-	bpf_probe_read_kernel_str(iptables->tablename, sizeof(iptables->tablename), table->name);
+			 u64 delay, struct iptables_meta *iptables)
+{
+	if (table)
+		bpf_probe_read_kernel_str(iptables->tablename, sizeof(iptables->tablename), table->name);
 	BPF_CORE_READ_INTO(&iptables->hook, state, hook);
 	BPF_CORE_READ_INTO(&iptables->pf, state, pf);
 	iptables->verdict = verdict;
@@ -734,6 +736,18 @@ int BPF_KPROBE(kprobe_ipt_do_table_old, struct sk_buff *skb,
 
 SEC("kretprobe/ipt_do_table")
 int BPF_KRETPROBE(kretprobe_ipt_do_table, uint ret)
+{
+	return ipt_do_table_exit(ctx, ret);
+}
+
+SEC("kprobe/nf_hook_slow")
+int BPF_KPROBE(kprobe_nf_hook_slow, struct sk_buff *skb, struct nf_hook_state *state)
+{
+	return ipt_do_table_entry(ctx, skb, state, NULL);
+}
+
+SEC("kretprobe/nf_hook_slow")
+int BPF_KRETPROBE(kretprobe_nf_hook_slow, uint ret)
 {
 	return ipt_do_table_exit(ctx, ret);
 }
