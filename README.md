@@ -110,7 +110,7 @@ their commit messages.
 
 ## Credits
 
-This repo is forked from [cilium/pwru](https://github.com/Asphaltt/vista), and
+This repo is forked from [cilium/pwru](https://github.com/cilium/pwru), and
 extend to support iptables tracing and socket tracing.
 
 Thanks for the original great work!
