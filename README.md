@@ -61,13 +61,16 @@ Usage: ./vista [options] [pcap-filter]
       --kprobe-backend string          Tracing backend('kprobe', 'kprobe-multi'). Will auto-detect if not specified.
       --output-file string             write traces to file
       --output-iptables                print iptables
-      --output-limit-lines uint        exit the program after the number of events has been received/printed
+      --output-limit-lines int         exit the program after the number of events has been received/printed
       --output-meta                    print skb metadata
       --output-sk                      print sock
       --output-skb                     print skb
       --output-stack                   print stack
       --output-tcp                     print TCP
       --output-tuple                   print L4 tuple
+      --pcap-file string               write packets to pcap file, only work with --filter-trace-xdp/--filter-trace-tc
+      --pcap-mode strings              pcap mode, can be 'entry' and/or 'exit', only work with --pcap-file. Default is 'entry' and 'exit'. 'entry' is to capture packet before BPF prog, 'exit' is to capture packet after BPF prog.
+      --pcap-snaplen uint16            snapture length of packet for pcap (default 256)
       --timestamp string               print timestamp per event ("relative", "absolute", "none") (default "none")
       --version                        show vista version and exit
 ```
@@ -75,6 +78,31 @@ Usage: ./vista [options] [pcap-filter]
 The `--filter-skb-func` switch does an exact match on function names i.e.
 `--filter-skb-func=foo` only matches `foo()`; for a wildcarded match, try
 `--filter-skb-func=".*foo.*"` instead. The same applies to `--filter-sk-func`.
+
+### Examples
+
+#### Capture packets when --filter-trace-xdp and/or --filter-trace-tc is enabled
+
+```bash
+$ sudo ./vista --filter-trace-xdp --filter-trace-tc --output-meta --output-tuple --output-limit-lines 4 --pcap-file vista.pcapng icmp
+2024/05/25 13:08:37 Tracing tc progs..
+2024/05/25 13:08:37 Tracing xdp progs..
+2024/05/25 13:08:37 Listening for events..
+            SKB/SK    CPU          PROCESS                     FUNC
+0xffff990282314000      2     [<empty>(0)]               dummy(xdp) netns=4026531840 mark=0x0 iface=2(ens33) proto=0x0000 mtu=1500 len=98 pkt_type=HOST 192.168.241.1->192.168.241.133(icmp request id=23089 seq=0)
+Saving this packet to vista.pcapng..
+0xffff990282314000      2     [<empty>(0)]               dummy(xdp) netns=4026531840 mark=0x0 iface=2(ens33) proto=0x0000 mtu=1500 len=98 pkt_type=HOST 192.168.241.1->192.168.241.133(icmp request id=23089 seq=0)
+Saving this packet to vista.pcapng..
+0xffff990282314000      2     [<empty>(0)]                dummy(tc) netns=4026531840 mark=0x0 iface=2(ens33) proto=0x0800 mtu=1500 len=98 pkt_type=HOST 192.168.241.1->192.168.241.133(icmp request id=23089 seq=0)
+Saving this packet to vista.pcapng..
+0xffff990282314000      2     [<empty>(0)]                dummy(tc) netns=4026531840 mark=0x0 iface=2(ens33) proto=0x0800 mtu=1500 len=98 pkt_type=HOST 192.168.241.1->192.168.241.133(icmp request id=23089 seq=0)
+Saving this packet to vista.pcapng..
+2024/05/25 13:08:39 Printed 4 events, exiting program..
+```
+
+There is enhanced packet information for each packet, like `comment`, `Interface queue` and `Verdict`.
+
+![vista.pcapng](./vista-pcapng.png)
 
 ## Developing
 
