@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 
@@ -28,6 +29,9 @@ const (
 
 	ProgNameFentryXDPPcap = "fentry_xdp_pcap"
 	ProgNameFexitXDPPcap  = "fexit_xdp_pcap"
+
+	pcapModeEntry = "entry"
+	pcapModeExit  = "exit"
 )
 
 type tracing struct {
@@ -70,10 +74,20 @@ func (t *tracing) addLink(l link.Link) {
 	t.links = append(t.links, l)
 }
 
-func (t *tracing) traceProg(spec *ebpf.CollectionSpec,
-	opts *ebpf.CollectionOptions, prog *ebpf.Program, n2a BpfProgName2Addr,
-	fentryName, fexitName string,
-) error {
+type TracingOptions struct {
+	Coll *ebpf.Collection
+	Spec *ebpf.CollectionSpec
+	Opts *ebpf.CollectionOptions
+
+	OutputSkb bool
+	Pcap      bool
+	PcapModes []string
+	N2A       BpfProgName2Addr
+
+	progType ebpf.ProgramType
+}
+
+func (t *tracing) traceProg(options *TracingOptions, prog *ebpf.Program, fentryName, fexitName string) error {
 	entryFn, name, err := getEntryFuncName(prog)
 	if err != nil {
 		if errors.Is(err, errNotFound) {
@@ -94,15 +108,15 @@ func (t *tracing) traceProg(spec *ebpf.CollectionSpec,
 	// distinguish which exact bpf prog is called.
 	//   -- @jschwinger233
 
-	addr, ok := n2a[entryFn]
+	addr, ok := options.N2A[entryFn]
 	if !ok {
-		addr, ok = n2a[name]
+		addr, ok = options.N2A[name]
 		if !ok {
 			return fmt.Errorf("failed to find address for function %s of bpf prog %v", name, prog)
 		}
 	}
 
-	spec = spec.Copy()
+	spec := options.Spec.Copy()
 	if err := spec.RewriteConstants(map[string]any{
 		"BPF_PROG_ADDR": addr,
 	}); err != nil {
@@ -113,7 +127,7 @@ func (t *tracing) traceProg(spec *ebpf.CollectionSpec,
 	spec.Programs[fentryName].AttachTo = entryFn
 	spec.Programs[fexitName].AttachTarget = prog
 	spec.Programs[fexitName].AttachTo = entryFn
-	coll, err := ebpf.NewCollectionWithOptions(spec, *opts)
+	coll, err := ebpf.NewCollectionWithOptions(spec, *options.Opts)
 	if err != nil {
 		var (
 			ve          *ebpf.VerifierError
@@ -127,32 +141,33 @@ func (t *tracing) traceProg(spec *ebpf.CollectionSpec,
 	}
 	defer coll.Close()
 
-	tracing, err := link.AttachTracing(link.TracingOptions{
-		Program: coll.Programs[fentryName],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to attach tracing: %w", err)
+	if !options.Pcap || slices.Contains(options.PcapModes, pcapModeEntry) {
+		tracing, err := link.AttachTracing(link.TracingOptions{
+			Program: coll.Programs[fentryName],
+		})
+		if err != nil {
+			return fmt.Errorf("failed to attach tracing: %w", err)
+		}
+
+		t.addLink(tracing)
 	}
 
-	t.addLink(tracing)
+	if !options.Pcap || slices.Contains(options.PcapModes, pcapModeExit) {
+		tracing, err := link.AttachTracing(link.TracingOptions{
+			Program: coll.Programs[fexitName],
+		})
+		if err != nil {
+			return fmt.Errorf("failed to attach tracing: %w", err)
+		}
 
-	tracing, err = link.AttachTracing(link.TracingOptions{
-		Program: coll.Programs[fexitName],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to attach tracing: %w", err)
+		t.addLink(tracing)
 	}
-
-	t.addLink(tracing)
 
 	return nil
 }
 
-func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
-	opts *ebpf.CollectionOptions, outputSkb, pcap bool, n2a BpfProgName2Addr,
-	progType ebpf.ProgramType, fentryName, fexitName, fentryPcap, fexitPcap string,
-) error {
-	progs, err := listBpfProgs(progType)
+func (t *tracing) trace(options *TracingOptions, fentryName, fexitName, fentryPcap, fexitPcap string) error {
+	progs, err := listBpfProgs(options.progType)
 	if err != nil {
 		log.Fatalf("failed to list bpf progs: %w", err)
 	}
@@ -163,29 +178,29 @@ func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	}()
 
 	entry, exit := fentryName, fexitName
-	if pcap {
-		delete(spec.Programs, fentryName)
-		delete(spec.Programs, fexitName)
+	if options.Pcap {
+		delete(options.Spec.Programs, fentryName)
+		delete(options.Spec.Programs, fexitName)
 
 		entry, exit = fentryPcap, fexitPcap
 	} else {
-		delete(spec.Programs, fentryPcap)
-		delete(spec.Programs, fexitPcap)
+		delete(options.Spec.Programs, fentryPcap)
+		delete(options.Spec.Programs, fexitPcap)
 	}
 
 	// Reusing maps from previous collection is to handle the events together
 	// with the kprobes.
 	replacedMaps := map[string]*ebpf.Map{
-		"events":          coll.Maps["events"],
-		"print_stack_map": coll.Maps["print_stack_map"],
+		"events":          options.Coll.Maps["events"],
+		"print_stack_map": options.Coll.Maps["print_stack_map"],
 	}
-	if outputSkb {
-		replacedMaps["print_skb_map"] = coll.Maps["print_skb_map"]
+	if options.OutputSkb {
+		replacedMaps["print_skb_map"] = options.Coll.Maps["print_skb_map"]
 	}
-	if pcap {
-		replacedMaps["pcap_events"] = coll.Maps["pcap_events"]
+	if options.Pcap {
+		replacedMaps["pcap_events"] = options.Coll.Maps["pcap_events"]
 	}
-	opts.MapReplacements = replacedMaps
+	options.Opts.MapReplacements = replacedMaps
 
 	t.links = make([]link.Link, 0, len(progs)*2)
 
@@ -194,7 +209,7 @@ func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	for _, prog := range progs {
 		prog := prog
 		errg.Go(func() error {
-			return t.traceProg(spec, opts, prog, n2a, entry, exit)
+			return t.traceProg(options, prog, entry, exit)
 		})
 	}
 
@@ -206,24 +221,20 @@ func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	return nil
 }
 
-func TraceTC(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
-	opts *ebpf.CollectionOptions, outputSkb, pcap bool, n2a BpfProgName2Addr,
-) *tracing {
+func TraceTC(options TracingOptions) *tracing {
 	var t tracing
-	if err := t.trace(coll, spec, opts, outputSkb, pcap, n2a, ebpf.SchedCLS,
-		ProgNameFentryTC, ProgNameFexitTC, ProgNameFentryTCPcap, ProgNameFexitTCPcap); err != nil {
+	options.progType = ebpf.SchedCLS
+	if err := t.trace(&options, ProgNameFentryTC, ProgNameFexitTC, ProgNameFentryTCPcap, ProgNameFexitTCPcap); err != nil {
 		log.Fatalf("failed to trace TC progs: %v", err)
 	}
 
 	return &t
 }
 
-func TraceXDP(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
-	opts *ebpf.CollectionOptions, outputSkb, pcap bool, n2a BpfProgName2Addr,
-) *tracing {
+func TraceXDP(options TracingOptions) *tracing {
 	var t tracing
-	if err := t.trace(coll, spec, opts, outputSkb, pcap, n2a, ebpf.XDP,
-		ProgNameFentryXDP, ProgNameFexitXDP, ProgNameFentryXDPPcap, ProgNameFexitXDPPcap); err != nil {
+	options.progType = ebpf.XDP
+	if err := t.trace(&options, ProgNameFentryXDP, ProgNameFexitXDP, ProgNameFentryXDPPcap, ProgNameFexitXDPPcap); err != nil {
 		log.Fatalf("failed to trace XDP progs: %v", err)
 	}
 

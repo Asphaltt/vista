@@ -74,9 +74,9 @@ func (p *pcapWriter) meta2options(ev *Event, meta *PcapMeta, iface string) []pca
 
 	isFexit := meta.IsFexit == 1
 	if isFexit {
-		info["mode"] = "fexit"
+		info["tracing"] = "fexit"
 	} else {
-		info["mode"] = "fentry"
+		info["tracing"] = "fentry"
 	}
 
 	isXdp := ev.Type == eventTypeTracingXdp

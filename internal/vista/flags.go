@@ -67,6 +67,7 @@ type Flags struct {
 
 	PcapFile    string
 	PcapSnaplen uint16
+	PcapMode    []string
 
 	FilterSkbDropStack bool
 
@@ -113,6 +114,7 @@ func (f *Flags) SetFlags() {
 
 	flag.StringVar(&f.PcapFile, "pcap-file", "", "write packets to pcap file, only work with --filter-trace-xdp/--filter-trace-tc")
 	flag.Uint16Var(&f.PcapSnaplen, "pcap-snaplen", 256, "snapture length of packet for pcap")
+	flag.StringSliceVar(&f.PcapMode, "pcap-mode", nil, "pcap mode, can be 'entry' and/or 'exit', only work with --pcap-file. Default is 'entry' and 'exit'. 'entry' is to capture packet before BPF prog, 'exit' is to capture packet after BPF prog.")
 
 	flag.StringVar(&f.ReadyFile, "ready-file", "", "create file after all BPF progs are attached")
 	flag.Lookup("ready-file").Hidden = true
@@ -224,8 +226,20 @@ func (f *Flags) Parse() {
 		log.Fatal("--pcap-file can only be used with --filter-trace-xdp and/or --filter-trace-tc")
 	}
 
-	if f.PcapFile != "" && f.PcapSnaplen < (14+20) {
-		log.Fatalf("Invalid --filter-snap-len(%d), cannot be < 34", f.PcapSnaplen)
+	if f.PcapFile != "" {
+		if f.PcapSnaplen < (14 + 20) {
+			log.Fatalf("Invalid --filter-snap-len(%d), cannot be < 34", f.PcapSnaplen)
+		}
+
+		for _, mode := range f.PcapMode {
+			if mode != pcapModeEntry && mode != pcapModeExit {
+				log.Fatalf("Invalid --pcap-mode(%s), can only be 'entry' and/or 'exit'", strings.Join(f.PcapMode, ","))
+			}
+		}
+
+		if len(f.PcapMode) == 0 {
+			f.PcapMode = []string{pcapModeEntry, pcapModeExit}
+		}
 	}
 
 	if f.FilterTCPLifetime < 0 {

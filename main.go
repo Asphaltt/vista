@@ -209,7 +209,15 @@ func main() {
 		if havePcapFile && !vista.HaveBpfSkbOutput() {
 			log.Fatalf("Current kernel does not support skb output to run with --filter-trace-tc --pcap-file %s", flags.PcapFile)
 		}
-		t := vista.TraceTC(coll, bpfSpecFentryTc, &opts, flags.OutputSkb, havePcapFile, name2addr)
+		t := vista.TraceTC(vista.TracingOptions{
+			Coll:      coll,
+			Spec:      bpfSpecFentryTc,
+			Opts:      &opts,
+			OutputSkb: flags.OutputSkb,
+			Pcap:      havePcapFile,
+			PcapModes: flags.PcapMode,
+			N2A:       name2addr,
+		})
 		defer t.Close()
 		traceTc = t.HaveTracing()
 		log.Println("Tracing tc progs..")
@@ -220,7 +228,15 @@ func main() {
 		if havePcapFile && !vista.HaveBpfXdpOutput() {
 			log.Fatalf("Current kernel does not support xdp output to run with --filter-trace-xdp --pcap-file %s", flags.PcapFile)
 		}
-		t := vista.TraceXDP(coll, bpfSpecFentryXdp, &opts, flags.OutputSkb, havePcapFile, name2addr)
+		t := vista.TraceXDP(vista.TracingOptions{
+			Coll:      coll,
+			Spec:      bpfSpecFentryXdp,
+			Opts:      &opts,
+			OutputSkb: flags.OutputSkb,
+			Pcap:      havePcapFile,
+			PcapModes: flags.PcapMode,
+			N2A:       name2addr,
+		})
 		defer t.Close()
 		traceXdp = t.HaveTracing()
 		log.Println("Tracing xdp progs..")
