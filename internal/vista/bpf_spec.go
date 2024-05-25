@@ -8,10 +8,19 @@ import "github.com/cilium/ebpf"
 func TrimBpfSpec(spec *ebpf.CollectionSpec, f *Flags, haveFexit bool) {
 	// fentry_tc&fentry_xdp are not used in the kprobe/kprobe-multi cases. So,
 	// they should be deleted from the spec.
-	delete(spec.Programs, "fentry_tc")
-	delete(spec.Programs, "fexit_tc")
-	delete(spec.Programs, "fentry_xdp")
-	delete(spec.Programs, "fexit_xdp")
+	tracingProgNames := []string{
+		ProgNameFentryTC,
+		ProgNameFexitTC,
+		ProgNameFentryTCPcap,
+		ProgNameFexitTCPcap,
+		ProgNameFentryXDP,
+		ProgNameFexitXDP,
+		ProgNameFentryXDPPcap,
+		ProgNameFexitXDPPcap,
+	}
+	for _, progName := range tracingProgNames {
+		delete(spec.Programs, progName)
+	}
 
 	// If not tracking skb, deleting the skb-tracking programs to reduce loading
 	// time.

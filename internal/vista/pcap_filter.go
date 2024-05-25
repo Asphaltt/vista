@@ -44,17 +44,26 @@ func InjectPcapFilter(spec *ebpf.CollectionSpec, f *Flags) {
 	}
 
 	if f.FilterTraceTc {
-		injectPcapFilter(spec, []string{"fentry_tc", "fexit_tc"}, f)
+		injectPcapFilter(spec, []string{
+			ProgNameFentryTC,
+			ProgNameFexitTC,
+			ProgNameFentryTCPcap,
+			ProgNameFexitTCPcap,
+		}, f)
 	}
 
 	if f.FilterTraceXdp {
-		progSpec := spec.Programs["fentry_xdp"]
-		if err := libpcap.InjectL2Filter(progSpec, f.FilterPcap); err != nil {
-			log.Fatalf("Failed to inject filter ebpf for fentry_xdp: %v", err)
+		progNames := []string{
+			ProgNameFentryXDP,
+			ProgNameFexitXDP,
+			ProgNameFentryXDPPcap,
+			ProgNameFexitXDPPcap,
 		}
-		progSpec = spec.Programs["fexit_xdp"]
-		if err := libpcap.InjectL2Filter(progSpec, f.FilterPcap); err != nil {
-			log.Fatalf("Failed to inject filter ebpf for fexit_xdp: %v", err)
+		for _, progName := range progNames {
+			progSpec := spec.Programs[progName]
+			if err := libpcap.InjectL2Filter(progSpec, f.FilterPcap); err != nil {
+				log.Fatalf("Failed to inject filter ebpf for %s: %v", progName, err)
+			}
 		}
 	}
 

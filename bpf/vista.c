@@ -579,8 +579,8 @@ output_skb_pcap_event(struct sk_buff *skb, struct event_t *event, int action, bo
 	bpf_skb_output(skb, &pcap_events, flags, event, __sizeof_pcap_event);
 }
 
-static __always_inline void
-handle_tc_skb(struct sk_buff *skb, void *ctx, int action, bool is_fexit) {
+static __noinline void
+handle_tc_skb(struct sk_buff *skb, void *ctx, int action, bool is_fexit, const bool pcap) {
 	struct event_t *event = get_event();
 	if (!event)
 		return;
@@ -595,21 +595,38 @@ handle_tc_skb(struct sk_buff *skb, void *ctx, int action, bool is_fexit) {
 
 	if (!cfg->output_pcap) {
 		bpf_map_push_elem(&events, event, BPF_EXIST);
-	} else {
+		return;
+	}
+
+	if (pcap) {
 		output_skb_pcap_event(skb, event, action, is_fexit);
 	}
 }
 
 SEC("fentry/tc")
 int BPF_PROG(fentry_tc, struct sk_buff *skb) {
-	handle_tc_skb(skb, ctx, 0, false);
+	handle_tc_skb(skb, ctx, 0, false, false);
+
+	return BPF_OK;
+}
+
+SEC("fentry/tc")
+int BPF_PROG(fentry_tc_pcap, struct sk_buff *skb) {
+	handle_tc_skb(skb, ctx, 0, false, true);
 
 	return BPF_OK;
 }
 
 SEC("fexit/tc")
 int BPF_PROG(fexit_tc, struct sk_buff *skb, int action) {
-	handle_tc_skb(skb, ctx, action, true);
+	handle_tc_skb(skb, ctx, action, true, false);
+
+	return BPF_OK;
+}
+
+SEC("fexit/tc")
+int BPF_PROG(fexit_tc_pcap, struct sk_buff *skb, int action) {
+	handle_tc_skb(skb, ctx, action, true, true);
 
 	return BPF_OK;
 }
@@ -720,8 +737,8 @@ output_xdp_pcap_event(struct xdp_buff *xdp, struct event_t *event, u32 len, int 
 	bpf_xdp_output(xdp, &pcap_events, flags, event, __sizeof_pcap_event);
 }
 
-static __always_inline void
-handle_xdp_buff(struct xdp_buff *xdp, void *ctx, int verdict, bool is_fexit) {
+static __noinline void
+handle_xdp_buff(struct xdp_buff *xdp, void *ctx, int verdict, bool is_fexit, const bool pcap) {
 	struct event_t *event = get_event();
 	if (!event)
 		return;
@@ -743,21 +760,38 @@ handle_xdp_buff(struct xdp_buff *xdp, void *ctx, int verdict, bool is_fexit) {
 
 	if (!cfg->output_pcap) {
 		bpf_map_push_elem(&events, event, BPF_EXIST);
-	} else {
+		return;
+	}
+
+	if (pcap) {
 		output_xdp_pcap_event(xdp, event, event->meta.len, verdict, is_fexit);
 	}
 }
 
 SEC("fentry/xdp")
 int BPF_PROG(fentry_xdp, struct xdp_buff *xdp) {
-	handle_xdp_buff(xdp, ctx, 0, false);
+	handle_xdp_buff(xdp, ctx, 0, false, false);
+
+	return BPF_OK;
+}
+
+SEC("fentry/xdp")
+int BPF_PROG(fentry_xdp_pcap, struct xdp_buff *xdp) {
+	handle_xdp_buff(xdp, ctx, 0, false, true);
 
 	return BPF_OK;
 }
 
 SEC("fexit/xdp")
 int BPF_PROG(fexit_xdp, struct xdp_buff *xdp, int verdict) {
-	handle_xdp_buff(xdp, ctx, verdict, true);
+	handle_xdp_buff(xdp, ctx, verdict, true, false);
+
+	return BPF_OK;
+}
+
+SEC("fexit/xdp")
+int BPF_PROG(fexit_xdp_pcap, struct xdp_buff *xdp, int verdict) {
+	handle_xdp_buff(xdp, ctx, verdict, true, true);
 
 	return BPF_OK;
 }

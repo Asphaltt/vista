@@ -8,11 +8,26 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	ProgNameFentryTC = "fentry_tc"
+	ProgNameFexitTC  = "fexit_tc"
+
+	ProgNameFentryTCPcap = "fentry_tc_pcap"
+	ProgNameFexitTCPcap  = "fexit_tc_pcap"
+
+	ProgNameFentryXDP = "fentry_xdp"
+	ProgNameFexitXDP  = "fexit_xdp"
+
+	ProgNameFentryXDPPcap = "fentry_xdp_pcap"
+	ProgNameFexitXDPPcap  = "fexit_xdp_pcap"
 )
 
 type tracing struct {
@@ -65,6 +80,11 @@ func (t *tracing) traceProg(spec *ebpf.CollectionSpec,
 			return nil
 		}
 		return fmt.Errorf("failed to get entry function name: %w", err)
+	}
+
+	// Skip those dummy progs used for feature detection.
+	if strings.HasPrefix(entryFn, "vista_dummy_") {
+		return nil
 	}
 
 	// The addr may hold the wrong rip value, because two addresses could
@@ -130,7 +150,7 @@ func (t *tracing) traceProg(spec *ebpf.CollectionSpec,
 
 func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	opts *ebpf.CollectionOptions, outputSkb, pcap bool, n2a BpfProgName2Addr,
-	progType ebpf.ProgramType, fentryName, fexitName string,
+	progType ebpf.ProgramType, fentryName, fexitName, fentryPcap, fexitPcap string,
 ) error {
 	progs, err := listBpfProgs(progType)
 	if err != nil {
@@ -141,6 +161,17 @@ func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 			_ = p.Close()
 		}
 	}()
+
+	entry, exit := fentryName, fexitName
+	if pcap {
+		delete(spec.Programs, fentryName)
+		delete(spec.Programs, fexitName)
+
+		entry, exit = fentryPcap, fexitPcap
+	} else {
+		delete(spec.Programs, fentryPcap)
+		delete(spec.Programs, fexitPcap)
+	}
 
 	// Reusing maps from previous collection is to handle the events together
 	// with the kprobes.
@@ -163,7 +194,7 @@ func (t *tracing) trace(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	for _, prog := range progs {
 		prog := prog
 		errg.Go(func() error {
-			return t.traceProg(spec, opts, prog, n2a, fentryName, fexitName)
+			return t.traceProg(spec, opts, prog, n2a, entry, exit)
 		})
 	}
 
@@ -179,7 +210,8 @@ func TraceTC(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	opts *ebpf.CollectionOptions, outputSkb, pcap bool, n2a BpfProgName2Addr,
 ) *tracing {
 	var t tracing
-	if err := t.trace(coll, spec, opts, outputSkb, pcap, n2a, ebpf.SchedCLS, "fentry_tc", "fexit_tc"); err != nil {
+	if err := t.trace(coll, spec, opts, outputSkb, pcap, n2a, ebpf.SchedCLS,
+		ProgNameFentryTC, ProgNameFexitTC, ProgNameFentryTCPcap, ProgNameFexitTCPcap); err != nil {
 		log.Fatalf("failed to trace TC progs: %v", err)
 	}
 
@@ -190,7 +222,8 @@ func TraceXDP(coll *ebpf.Collection, spec *ebpf.CollectionSpec,
 	opts *ebpf.CollectionOptions, outputSkb, pcap bool, n2a BpfProgName2Addr,
 ) *tracing {
 	var t tracing
-	if err := t.trace(coll, spec, opts, outputSkb, pcap, n2a, ebpf.XDP, "fentry_xdp", "fexit_xdp"); err != nil {
+	if err := t.trace(coll, spec, opts, outputSkb, pcap, n2a, ebpf.XDP,
+		ProgNameFentryXDP, ProgNameFexitXDP, ProgNameFentryXDPPcap, ProgNameFexitXDPPcap); err != nil {
 		log.Fatalf("failed to trace XDP progs: %v", err)
 	}
 

@@ -6,6 +6,7 @@
 package vista
 
 import (
+	"github.com/Asphaltt/vista/internal/build"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/link"
@@ -63,6 +64,74 @@ func HaveBPFLinkTracing() bool {
 		return false
 	}
 	defer link.Close()
+
+	return true
+}
+
+func HaveBpfSkbOutput() bool {
+	spec, err := build.LoadVistaFeatures()
+	if err != nil {
+		return false
+	}
+
+	dummyName := "vista_dummy_tc"
+	dummySpec := spec.Copy()
+	dummySpec.Programs = map[string]*ebpf.ProgramSpec{
+		dummyName: spec.Programs[dummyName],
+	}
+
+	coll, err := ebpf.NewCollection(dummySpec)
+	if err != nil {
+		return false
+	}
+	defer coll.Close()
+
+	progName := "detect_bpf_skb_out"
+	spec.Programs = map[string]*ebpf.ProgramSpec{
+		progName: spec.Programs[progName],
+	}
+
+	spec.Programs[progName].AttachTarget = coll.Programs[dummyName]
+
+	coll2, err := ebpf.NewCollection(spec)
+	if err != nil {
+		return false
+	}
+	defer coll2.Close()
+
+	return true
+}
+
+func HaveBpfXdpOutput() bool {
+	spec, err := build.LoadVistaFeatures()
+	if err != nil {
+		return false
+	}
+
+	dummyName := "vista_dummy_xdp"
+	dummySpec := spec.Copy()
+	dummySpec.Programs = map[string]*ebpf.ProgramSpec{
+		dummyName: spec.Programs[dummyName],
+	}
+
+	coll, err := ebpf.NewCollection(dummySpec)
+	if err != nil {
+		return false
+	}
+	defer coll.Close()
+
+	progName := "detect_bpf_xdp_out"
+	spec.Programs = map[string]*ebpf.ProgramSpec{
+		progName: spec.Programs[progName],
+	}
+
+	spec.Programs[progName].AttachTarget = coll.Programs[dummyName]
+
+	coll2, err := ebpf.NewCollection(spec)
+	if err != nil {
+		return false
+	}
+	defer coll2.Close()
 
 	return true
 }

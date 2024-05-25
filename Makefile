@@ -24,7 +24,7 @@ gobuild:
 
 .PHONY: gogen
 gogen:
-	TARGET_GOARCH=$(TARGET_GOARCH) $(GO_GENERATE)
+	TARGET_GOARCH=$(TARGET_GOARCH) $(GO_GENERATE) ./internal/build
 
 ## Build the GO binary with libpcap and BPF
 vista: libpcap/libpcap.a gogen gobuild

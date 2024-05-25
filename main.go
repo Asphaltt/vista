@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 
+	"github.com/Asphaltt/vista/internal/build"
 	"github.com/Asphaltt/vista/internal/vista"
 )
 
@@ -124,13 +125,13 @@ func main() {
 	var bpfSpec *ebpf.CollectionSpec
 	switch {
 	case flags.OutputSkb && useKprobeMulti:
-		bpfSpec, err = LoadKProbeMultiVista()
+		bpfSpec, err = build.LoadKProbeMultiVista()
 	case flags.OutputSkb:
-		bpfSpec, err = LoadKProbeVista()
+		bpfSpec, err = build.LoadKProbeVista()
 	case useKprobeMulti:
-		bpfSpec, err = LoadKProbeMultiVistaWithoutOutputSKB()
+		bpfSpec, err = build.LoadKProbeMultiVistaWithoutOutputSKB()
 	default:
-		bpfSpec, err = LoadKProbeVistaWithoutOutputSKB()
+		bpfSpec, err = build.LoadKProbeVistaWithoutOutputSKB()
 	}
 	if err != nil {
 		log.Fatalf("Failed to load bpf spec: %v", err)
@@ -163,16 +164,20 @@ func main() {
 	if flags.FilterTraceTc {
 		bpfSpecFentryTc = bpfSpec.Copy()
 		bpfSpecFentryTc.Programs = map[string]*ebpf.ProgramSpec{
-			"fentry_tc": bpfSpecFentryTc.Programs["fentry_tc"],
-			"fexit_tc":  bpfSpecFentryTc.Programs["fexit_tc"],
+			vista.ProgNameFentryTC:     bpfSpecFentryTc.Programs[vista.ProgNameFentryTC],
+			vista.ProgNameFexitTC:      bpfSpecFentryTc.Programs[vista.ProgNameFexitTC],
+			vista.ProgNameFentryTCPcap: bpfSpecFentryTc.Programs[vista.ProgNameFentryTCPcap],
+			vista.ProgNameFexitTCPcap:  bpfSpecFentryTc.Programs[vista.ProgNameFexitTCPcap],
 		}
 	}
 	var bpfSpecFentryXdp *ebpf.CollectionSpec
 	if flags.FilterTraceXdp {
 		bpfSpecFentryXdp = bpfSpec.Copy()
 		bpfSpecFentryXdp.Programs = map[string]*ebpf.ProgramSpec{
-			"fentry_xdp": bpfSpecFentryXdp.Programs["fentry_xdp"],
-			"fexit_xdp":  bpfSpecFentryXdp.Programs["fexit_xdp"],
+			vista.ProgNameFentryXDP:     bpfSpecFentryXdp.Programs[vista.ProgNameFentryXDP],
+			vista.ProgNameFexitXDP:      bpfSpecFentryXdp.Programs[vista.ProgNameFexitXDP],
+			vista.ProgNameFentryXDPPcap: bpfSpecFentryXdp.Programs[vista.ProgNameFentryXDPPcap],
+			vista.ProgNameFexitXDPPcap:  bpfSpecFentryXdp.Programs[vista.ProgNameFexitXDPPcap],
 		}
 	}
 
@@ -201,6 +206,9 @@ func main() {
 
 	traceTc := false
 	if flags.FilterTraceTc {
+		if havePcapFile && !vista.HaveBpfSkbOutput() {
+			log.Fatalf("Current kernel does not support skb output to run with --filter-trace-tc --pcap-file %s", flags.PcapFile)
+		}
 		t := vista.TraceTC(coll, bpfSpecFentryTc, &opts, flags.OutputSkb, havePcapFile, name2addr)
 		defer t.Close()
 		traceTc = t.HaveTracing()
@@ -209,6 +217,9 @@ func main() {
 
 	traceXdp := false
 	if flags.FilterTraceXdp {
+		if havePcapFile && !vista.HaveBpfXdpOutput() {
+			log.Fatalf("Current kernel does not support xdp output to run with --filter-trace-xdp --pcap-file %s", flags.PcapFile)
+		}
 		t := vista.TraceXDP(coll, bpfSpecFentryXdp, &opts, flags.OutputSkb, havePcapFile, name2addr)
 		defer t.Close()
 		traceXdp = t.HaveTracing()
