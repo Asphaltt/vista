@@ -1,5 +1,5 @@
 GO := go
-GO_BUILD = CGO_ENABLED=1 $(GO) build
+GO_BUILD = CGO_ENABLED=1 $(GO) build -v -trimpath
 GO_GENERATE = $(GO) generate
 GO_TAGS ?=
 TARGET_GOARCH ?= amd64

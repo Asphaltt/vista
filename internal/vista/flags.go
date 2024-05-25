@@ -62,8 +62,11 @@ type Flags struct {
 	OutputIptables   bool
 	OutputTCP        bool
 	OutputSk         bool
-	OutputLimitLines uint64
+	OutputLimitLines int64
 	OutputFile       string
+
+	PcapFile    string
+	PcapSnaplen uint16
 
 	FilterSkbDropStack bool
 
@@ -102,11 +105,14 @@ func (f *Flags) SetFlags() {
 	flag.BoolVar(&f.OutputMeta, "output-meta", false, "print skb metadata")
 	flag.BoolVar(&f.OutputTuple, "output-tuple", false, "print L4 tuple")
 	flag.BoolVar(&f.OutputStack, "output-stack", false, "print stack")
-	flag.Uint64Var(&f.OutputLimitLines, "output-limit-lines", 0, "exit the program after the number of events has been received/printed")
+	flag.Int64Var(&f.OutputLimitLines, "output-limit-lines", 0, "exit the program after the number of events has been received/printed")
 
 	flag.BoolVar(&f.FilterSkbDropStack, "filter-skb-drop-stack", false, "trace kfree_skb and print skb drop stack")
 
 	flag.StringVar(&f.OutputFile, "output-file", "", "write traces to file")
+
+	flag.StringVar(&f.PcapFile, "pcap-file", "", "write packets to pcap file, only work with --filter-trace-xdp/--filter-trace-tc")
+	flag.Uint16Var(&f.PcapSnaplen, "pcap-snaplen", 256, "snapture length of packet for pcap")
 
 	flag.StringVar(&f.ReadyFile, "ready-file", "", "create file after all BPF progs are attached")
 	flag.Lookup("ready-file").Hidden = true
@@ -210,10 +216,26 @@ func (f *Flags) Parse() {
 		}
 	}
 
+	if f.OutputLimitLines < 0 {
+		log.Fatalf("Invalid --output-limit-lines(%d), cannot be < 0", f.OutputLimitLines)
+	}
+
+	if f.PcapFile != "" && (!f.FilterTraceXdp && !f.FilterTraceTc) {
+		log.Fatal("--pcap-file can only be used with --filter-trace-xdp and/or --filter-trace-tc")
+	}
+
+	if f.PcapFile != "" && f.PcapSnaplen < (14+20) {
+		log.Fatalf("Invalid --filter-snap-len(%d), cannot be < 34", f.PcapSnaplen)
+	}
+
 	if f.FilterTCPLifetime < 0 {
 		log.Fatalf("Invalid --filter-tcp-lifetime(%s), cannot be < 0s", f.FilterTCPLifetime)
 	}
 	if 0 < f.FilterTCPLifetime && f.FilterTCPLifetime < time.Millisecond {
 		log.Printf("Warning: --filter-tcp-lifetime(%s) is too small and meaningless to filter tcp socket", f.FilterTCPLifetime)
 	}
+}
+
+func (f *Flags) HavePcap() bool {
+	return f.PcapFile != "" && (f.FilterTraceSkb || f.FilterTraceXdp)
 }

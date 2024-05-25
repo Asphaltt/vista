@@ -28,6 +28,12 @@
 #define __packed __attribute__((packed))
 #endif
 
+#define min(x, y) ({					\
+	typeof(x) _min1 = (x);				\
+	typeof(y) _min2 = (y);				\
+	_min1 < _min2 ? _min1 : _min2;		\
+})
+
 const static bool TRUE = true;
 
 volatile const static __u64 BPF_PROG_ADDR = 0;
@@ -57,7 +63,7 @@ struct tuple {
 	union addr daddr;
 	u16 l3_proto;
 	u8 l4_proto;
-	u8 tpl_pad;
+	u8 icmptype;
 	union {
 		struct {
 			u16 sport;
@@ -66,8 +72,6 @@ struct tuple {
 		struct {
 			u16 icmpid;
 			u16 icmpseq;
-			u8 icmptype;
-			u8 pad[3];
 		};
 	};
 } __packed;
@@ -114,6 +118,14 @@ struct sk_meta {
 	u64 socket_flags;
 } __packed;
 
+struct pcap_meta {
+	u32 rx_queue;
+	u32 cap_len;
+	u8 action;
+	u8 is_fexit;
+	u16 pad;
+} __packed;
+
 u64 print_skb_id = 0;
 
 enum event_type {
@@ -138,16 +150,20 @@ struct event_t {
 	u64 skb_addr;
 	u64 ts;
 	typeof(print_skb_id) print_skb_id;
-	struct skb_meta meta;
-	struct tuple tuple;
 	s64 print_stack_id;
+	struct tuple tuple;
+	struct skb_meta meta;
 	u32 cpu_id;
 	union {
 		struct sk_meta sk;
 		struct tcp_meta tcp;
+		struct pcap_meta pcap;
 		struct iptables_meta iptables;
 	};
 } __packed;
+
+#define __sizeof_pcap_event \
+	(sizeof(struct event_t) - sizeof(struct tcp_meta) + sizeof(struct pcap_meta))
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -174,6 +190,10 @@ struct {
 	__type(value, struct event_t);
 	__uint(max_entries, MAX_QUEUE_ENTRIES);
 } events SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+} pcap_events SEC(".maps");
 
 #define MAX_TRACK_SIZE 1024
 struct {
@@ -202,6 +222,9 @@ struct config {
 	u16 output_iptables:1;
 	u16 output_tcp:1;
 	u16 output_sk:1;
+	u16 output_pcap:1;
+	u16 snap_len;
+	u16 pad;
 } __packed;
 
 static volatile const struct config CFG;
@@ -537,17 +560,56 @@ int BPF_PROG(fexit_skb_copy, struct sk_buff *old, gfp_t mask, struct sk_buff *ne
 	return BPF_OK;
 }
 
+static __always_inline void
+set_skb_pcap_meta(struct sk_buff *skb, struct pcap_meta *pcap, int action, bool is_fexit) {
+	u32 len = BPF_CORE_READ(skb, len);
+	pcap->rx_queue = BPF_CORE_READ(skb, queue_mapping);
+	pcap->cap_len = min(len, cfg->snap_len);
+	pcap->action = action;
+	pcap->is_fexit = is_fexit;
+}
+
+static __always_inline void
+output_skb_pcap_event(struct sk_buff *skb, struct event_t *event, int action, bool is_fexit) {
+	u64 flags;
+
+	set_skb_pcap_meta(skb, &event->pcap, action, is_fexit);
+
+	flags = (((u64) event->pcap.cap_len) << 32) | BPF_F_CURRENT_CPU;
+	bpf_skb_output(skb, &pcap_events, flags, event, __sizeof_pcap_event);
+}
+
+static __always_inline void
+handle_tc_skb(struct sk_buff *skb, void *ctx, int action, bool is_fexit) {
+	struct event_t *event = get_event();
+	if (!event)
+		return;
+
+	if (!handle_everything(skb, ctx, event, false))
+		return;
+
+	event->skb_addr = (u64) BPF_CORE_READ(skb, head);
+	event->addr = BPF_PROG_ADDR;
+	event->type = EVENT_TYPE_TC;
+	event->source = EVENT_SOURCE_SKB;
+
+	if (!cfg->output_pcap) {
+		bpf_map_push_elem(&events, event, BPF_EXIST);
+	} else {
+		output_skb_pcap_event(skb, event, action, is_fexit);
+	}
+}
+
 SEC("fentry/tc")
 int BPF_PROG(fentry_tc, struct sk_buff *skb) {
-	struct event_t event = {};
+	handle_tc_skb(skb, ctx, 0, false);
 
-	if (!handle_everything(skb, ctx, &event, false))
-		return BPF_OK;
+	return BPF_OK;
+}
 
-	event.skb_addr = (u64) BPF_CORE_READ(skb, head);
-	event.addr = BPF_PROG_ADDR;
-	event.type = EVENT_TYPE_TC;
-	bpf_map_push_elem(&events, &event, BPF_EXIST);
+SEC("fexit/tc")
+int BPF_PROG(fexit_tc, struct sk_buff *skb, int action) {
+	handle_tc_skb(skb, ctx, action, true);
 
 	return BPF_OK;
 }
@@ -583,6 +645,21 @@ filter_xdp_pcap(struct xdp_buff *xdp) {
 static __always_inline bool
 filter_xdp(struct xdp_buff *xdp) {
 	return filter_xdp_pcap(xdp) && filter_xdp_meta(xdp);
+}
+
+static __always_inline bool
+__filter(struct xdp_buff *xdp) {
+	u64 addr = (u64) BPF_CORE_READ(xdp, data_hard_start);
+	if (cfg->track_skb && bpf_map_lookup_elem(&skb_addresses, &addr))
+		return true;
+
+	if (!filter_xdp(xdp))
+		return false;
+
+	if (cfg->track_skb)
+		bpf_map_update_elem(&skb_addresses, &addr, &TRUE, BPF_ANY);
+
+	return true;
 }
 
 static __always_inline void
@@ -627,16 +704,31 @@ set_xdp_output(void *ctx, struct xdp_buff *xdp, struct event_t *event) {
 		event->print_stack_id = bpf_get_stackid(ctx, &print_stack_map, BPF_F_FAST_STACK_CMP);
 }
 
-SEC("fentry/xdp")
-int BPF_PROG(fentry_xdp, struct xdp_buff *xdp) {
-	u64 skb_addr = (u64) BPF_CORE_READ(xdp, data_hard_start);
+static __always_inline void
+set_xdp_pcap_meta(struct xdp_buff *xdp, struct pcap_meta *pcap, u32 len, int action, bool is_fexit) {
+	pcap->rx_queue = BPF_CORE_READ(xdp, rxq, queue_index);
+	pcap->cap_len = min(len, cfg->snap_len);
+	pcap->action = action;
+	pcap->is_fexit = is_fexit;
+}
+
+static __always_inline void
+output_xdp_pcap_event(struct xdp_buff *xdp, struct event_t *event, u32 len, int action, bool is_fexit) {
+	set_xdp_pcap_meta(xdp, &event->pcap, len, action, is_fexit);
+
+	u64 flags = (((u64) event->pcap.cap_len) << 32) | BPF_F_CURRENT_CPU;
+	bpf_xdp_output(xdp, &pcap_events, flags, event, __sizeof_pcap_event);
+}
+
+static __always_inline void
+handle_xdp_buff(struct xdp_buff *xdp, void *ctx, int verdict, bool is_fexit) {
 	struct event_t *event = get_event();
 	if (!event)
-		return BPF_OK;
+		return;
 
 	if (cfg->is_set) {
-		if (!filter_xdp(xdp))
-			return BPF_OK;
+		if (!__filter(xdp))
+			return;
 
 		set_xdp_output(ctx, xdp, event);
 	}
@@ -644,11 +736,28 @@ int BPF_PROG(fentry_xdp, struct xdp_buff *xdp) {
 	event->pid = bpf_get_current_pid_tgid() >> 32;
 	event->ts = bpf_ktime_get_ns();
 	event->cpu_id = bpf_get_smp_processor_id();
-	event->skb_addr = (u64) skb_addr;
+	event->skb_addr = (u64) BPF_CORE_READ(xdp, data_hard_start);
 	event->addr = BPF_PROG_ADDR;
 	event->type = EVENT_TYPE_XDP;
 	event->source = EVENT_SOURCE_SKB;
-	bpf_map_push_elem(&events, event, BPF_EXIST);
+
+	if (!cfg->output_pcap) {
+		bpf_map_push_elem(&events, event, BPF_EXIST);
+	} else {
+		output_xdp_pcap_event(xdp, event, event->meta.len, verdict, is_fexit);
+	}
+}
+
+SEC("fentry/xdp")
+int BPF_PROG(fentry_xdp, struct xdp_buff *xdp) {
+	handle_xdp_buff(xdp, ctx, 0, false);
+
+	return BPF_OK;
+}
+
+SEC("fexit/xdp")
+int BPF_PROG(fexit_xdp, struct xdp_buff *xdp, int verdict) {
+	handle_xdp_buff(xdp, ctx, verdict, true);
 
 	return BPF_OK;
 }

@@ -7,21 +7,13 @@ package vista
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"runtime"
-	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
-	"github.com/jsimonetti/rtnetlink"
-	"github.com/vishvananda/netns"
-	"golang.org/x/sys/unix"
 
 	"github.com/Asphaltt/vista/internal/byteorder"
 )
@@ -50,6 +42,7 @@ type output struct {
 	kprobeMulti   bool
 	kfreeReasons  map[uint32]string
 	ifaceCache    map[uint64]map[uint32]string
+	pcap          *pcapWriter
 }
 
 func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
@@ -71,10 +64,18 @@ func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
 	}
 
 	var ifs map[uint64]map[uint32]string
-	if flags.OutputMeta {
+	if flags.OutputMeta || flags.HavePcap() {
 		ifs, err = getIfaces()
 		if err != nil {
 			log.Printf("Failed to retrieve all ifaces from all network namespaces: %v. Some iface names might be not shown.", err)
+		}
+	}
+
+	var pcap *pcapWriter
+	if flags.HavePcap() {
+		pcap, err = newPcapWriter(flags.PcapFile, flags.FilterPcap, flags.PcapSnaplen)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -89,6 +90,7 @@ func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
 		kprobeMulti:   kprobeMulti,
 		kfreeReasons:  reasons,
 		ifaceCache:    ifs,
+		pcap:          pcap,
 	}, nil
 }
 
@@ -96,6 +98,10 @@ func (o *output) Close() {
 	if o.writer != os.Stdout {
 		_ = o.writer.Sync()
 		_ = o.writer.Close()
+	}
+
+	if o.pcap != nil {
+		o.pcap.close()
 	}
 }
 
@@ -188,124 +194,14 @@ func (o *output) Print(event *Event) {
 	o.buf.Reset()
 }
 
-func pktTypeToStr(pktType uint8) string {
-	// See: https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/if_packet.h#L26
-	const (
-		PACKET_USER   = 6
-		PACKET_KERNEL = 7
-	)
-	pktTypes := []string{
-		syscall.PACKET_HOST:      "HOST",
-		syscall.PACKET_BROADCAST: "BROADCAST",
-		syscall.PACKET_MULTICAST: "MULTICAST",
-		syscall.PACKET_OTHERHOST: "OTHERHOST",
-		syscall.PACKET_OUTGOING:  "OUTGOING",
-		syscall.PACKET_LOOPBACK:  "LOOPBACK",
-		PACKET_USER:              "USER",
-		PACKET_KERNEL:            "KERNEL",
-	}
-	if pktType <= PACKET_KERNEL {
-		return pktTypes[pktType]
-	}
-	return fmt.Sprintf("UNK(%d)", pktType)
-}
+func (o *output) Pcap(ev OutputEvent) error {
+	o.Print(ev.Event)
+	fmt.Fprintf(o.writer, "Saving this packet to %s\n", o.flags.PcapFile)
 
-func (o *output) getIfaceName(netnsInode, ifindex uint32) string {
-	if ifaces, ok := o.ifaceCache[uint64(netnsInode)]; ok {
-		if name, ok := ifaces[ifindex]; ok {
-			return fmt.Sprintf("%d(%s)", ifindex, name)
-		}
-	}
-	return strconv.Itoa(int(ifindex))
-}
-
-func getIfaces() (map[uint64]map[uint32]string, error) {
-	var err error
-	procPath := "/proc"
-
-	ifaceCache := make(map[uint64]map[uint32]string)
-
-	dirs, err := os.ReadDir(procPath)
-	if err != nil {
-		return nil, err
+	iface := o.getIfaceName(ev.Event.Meta.Netns, ev.Event.Meta.Ifindex)
+	if err := o.pcap.writePacket(ev, iface); err != nil {
+		return fmt.Errorf("failed to handle packet: %w", err)
 	}
 
-	for _, d := range dirs {
-		if !d.IsDir() {
-			continue
-		}
-
-		// skip non-process dirs
-		if _, err := strconv.Atoi(d.Name()); err != nil {
-			continue
-		}
-
-		// get inode of netns
-		path := filepath.Join(procPath, d.Name(), "ns", "net")
-		fd, err0 := os.Open(path)
-		if err0 != nil {
-			err = errors.Join(err, err0)
-			continue
-		}
-		var stat unix.Stat_t
-		if err0 := unix.Fstat(int(fd.Fd()), &stat); err0 != nil {
-			err = errors.Join(err, err0)
-			continue
-		}
-		inode := stat.Ino
-
-		if _, exists := ifaceCache[inode]; exists {
-			continue // we already checked that netns
-		}
-
-		ifaces, err0 := getIfacesInNetNs(path)
-		if err0 != nil {
-			err = errors.Join(err, err0)
-			continue
-		}
-
-		ifaceCache[inode] = ifaces
-
-	}
-
-	return ifaceCache, err
-}
-
-func getIfacesInNetNs(path string) (map[uint32]string, error) {
-	current, err := netns.Get()
-	if err != nil {
-		return nil, err
-	}
-
-	remote, err := netns.GetFromPath(path)
-	if err != nil {
-		return nil, err
-	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	if err := netns.Set(remote); err != nil {
-		return nil, err
-	}
-
-	defer netns.Set(current)
-
-	conn, err := rtnetlink.Dial(nil)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	msg, err := conn.Link.List()
-	if err != nil {
-		return nil, err
-	}
-
-	ifaces := make(map[uint32]string)
-	for _, link := range msg {
-		ifaces[link.Index] = link.Attributes.Name
-	}
-
-	return ifaces, nil
+	return nil
 }

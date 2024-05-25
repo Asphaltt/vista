@@ -6,6 +6,7 @@
 package vista
 
 import (
+	"encoding/binary"
 	"unsafe"
 )
 
@@ -25,16 +26,15 @@ type ICMPInfo struct {
 	ID   uint16
 	Seq  uint16
 	Type uint8
-	Pad  [3]uint8
 }
 
 type Tuple struct {
-	Saddr   [16]byte
-	Daddr   [16]byte
-	L3Proto uint16
-	L4Proto uint8
-	Pad     uint8
-	Data    [8]byte
+	Saddr    [16]byte
+	Daddr    [16]byte
+	L3Proto  uint16
+	L4Proto  uint8
+	ICMPType uint8
+	Data     [4]byte
 }
 
 func (t *Tuple) PortInfo() *PortInfo {
@@ -42,7 +42,11 @@ func (t *Tuple) PortInfo() *PortInfo {
 }
 
 func (t *Tuple) ICMPInfo() *ICMPInfo {
-	return (*ICMPInfo)(unsafe.Pointer(&t.Data[0]))
+	var ii ICMPInfo
+	ii.Type = t.ICMPType
+	ii.ID = binary.NativeEndian.Uint16(t.Data[0:2])
+	ii.Seq = binary.NativeEndian.Uint16(t.Data[2:4])
+	return &ii
 }
 
 type Meta struct {
@@ -102,10 +106,22 @@ type SockMeta struct {
 	SocketFlags     uint64
 }
 
+type PcapMeta struct {
+	RxQueue uint32
+	CapLen  uint32
+	Action  uint8
+	IsFexit uint8
+	Pad     [2]byte
+}
+
 const (
 	sizeofIptablesMeta = int(unsafe.Sizeof(IptablesMeta{})) // 48
 	sizeofTCPMeta      = int(unsafe.Sizeof(TCPMeta{}))      // 72
 	sizeofSockMeta     = int(unsafe.Sizeof(SockMeta{}))     // 48
+	sizeofPcapMeta     = int(unsafe.Sizeof(PcapMeta{}))     // 12
+
+	sizeofEvent     = int(unsafe.Sizeof(Event{}))       // 192
+	sizeofPcapEvent = sizeofEvent - 72 + sizeofPcapMeta // 132
 )
 
 type Event struct {
@@ -117,9 +133,9 @@ type Event struct {
 	SAddr        uint64
 	Timestamp    uint64
 	PrintSkbId   uint64
-	Meta         Meta
-	Tuple        Tuple
 	PrintStackId int64
+	Tuple        Tuple
+	Meta         Meta
 	CPU          uint32
 	Data         [72]byte
 }
@@ -134,4 +150,8 @@ func (e *Event) TCP() *TCPMeta {
 
 func (e *Event) Sock() *SockMeta {
 	return (*SockMeta)(unsafe.Pointer(&e.Data[0]))
+}
+
+func (e *Event) Pcap() *PcapMeta {
+	return (*PcapMeta)(unsafe.Pointer(&e.Data[0]))
 }

@@ -31,6 +31,7 @@ const (
 	outputFlagOutputIptables
 	outputFlagOutputTCP
 	outputFlagOutputSk
+	outputFlagPcap
 )
 
 type FilterCfg struct {
@@ -47,6 +48,9 @@ type FilterCfg struct {
 	FilterL4Proto uint16
 
 	OutputFlags uint16
+
+	PcapSnapLen uint16
+	Pad         uint16
 }
 
 func (cfg *FilterCfg) setOutputFlags(idx int) {
@@ -59,12 +63,14 @@ func GetConfig(flags *Flags) (cfg FilterCfg, err error) {
 		FilterSkMark:      flags.FilterSkMark,
 		FilterL4Proto:     flags.filterL4prto,
 		FilterTCPLifetime: uint64(flags.FilterTCPLifetime.Nanoseconds()),
+		PcapSnapLen:       flags.PcapSnaplen,
 	}
 
 	outputFlags := []struct {
 		b   bool
 		idx int
 	}{
+		{true, outputFlagIsSet},
 		{flags.FilterTraceSkb, outputFlagTrackSkb},
 		{flags.OutputMeta, outputFlagOutputMeta},
 		{flags.OutputTuple, outputFlagOutputTuple},
@@ -73,6 +79,7 @@ func GetConfig(flags *Flags) (cfg FilterCfg, err error) {
 		{flags.OutputIptables, outputFlagOutputIptables},
 		{flags.OutputTCP, outputFlagOutputTCP},
 		{flags.OutputSk, outputFlagOutputSk},
+		{flags.HavePcap(), outputFlagPcap},
 	}
 	for _, f := range outputFlags {
 		if f.b {
@@ -106,11 +113,6 @@ func GetConfig(flags *Flags) (cfg FilterCfg, err error) {
 	}
 	if cfg.FilterIfindex, err = parseIfindex(flags.FilterIfname, ns); err != nil {
 		return
-	}
-
-	isSet := cfg != FilterCfg{}
-	if isSet {
-		cfg.setOutputFlags(outputFlagIsSet)
 	}
 
 	return

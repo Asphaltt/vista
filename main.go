@@ -17,7 +17,9 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
+	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/rlimit"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 
 	"github.com/Asphaltt/vista/internal/vista"
@@ -155,13 +157,14 @@ func main() {
 
 	// As we know, for every fentry tracing program, there is a corresponding
 	// bpf prog spec with attaching target and attaching function. So, we can
-	// just copy the spec and keep the fentry_tc/fentry_xdp program spec only in
-	// the copied spec.
+	// just copy the spec and keep the fentry_tc/fexit_tc/fentry_xdp/fexit_xdp
+	// program spec only in the copied spec.
 	var bpfSpecFentryTc *ebpf.CollectionSpec
 	if flags.FilterTraceTc {
 		bpfSpecFentryTc = bpfSpec.Copy()
 		bpfSpecFentryTc.Programs = map[string]*ebpf.ProgramSpec{
 			"fentry_tc": bpfSpecFentryTc.Programs["fentry_tc"],
+			"fexit_tc":  bpfSpecFentryTc.Programs["fexit_tc"],
 		}
 	}
 	var bpfSpecFentryXdp *ebpf.CollectionSpec
@@ -169,6 +172,7 @@ func main() {
 		bpfSpecFentryXdp = bpfSpec.Copy()
 		bpfSpecFentryXdp.Programs = map[string]*ebpf.ProgramSpec{
 			"fentry_xdp": bpfSpecFentryXdp.Programs["fentry_xdp"],
+			"fexit_xdp":  bpfSpecFentryXdp.Programs["fexit_xdp"],
 		}
 	}
 
@@ -193,18 +197,22 @@ func main() {
 	}
 	defer coll.Close()
 
+	havePcapFile := flags.PcapFile != ""
+
 	traceTc := false
 	if flags.FilterTraceTc {
-		t := vista.TraceTC(coll, bpfSpecFentryTc, &opts, flags.OutputSkb, name2addr)
+		t := vista.TraceTC(coll, bpfSpecFentryTc, &opts, flags.OutputSkb, havePcapFile, name2addr)
 		defer t.Close()
 		traceTc = t.HaveTracing()
+		log.Println("Tracing tc progs..")
 	}
 
 	traceXdp := false
 	if flags.FilterTraceXdp {
-		t := vista.TraceXDP(coll, bpfSpecFentryXdp, &opts, flags.OutputSkb, name2addr)
+		t := vista.TraceXDP(coll, bpfSpecFentryXdp, &opts, flags.OutputSkb, havePcapFile, name2addr)
 		defer t.Close()
 		traceXdp = t.HaveTracing()
+		log.Println("Tracing xdp progs..")
 	}
 
 	kprobeIptables := false
@@ -213,6 +221,7 @@ func main() {
 		defer k.Close()
 		kprobeIptables = k.HaveLinks()
 		delete(funcsSkb, "ipt_do_table")
+		delete(funcsSkb, "nf_hook_slow")
 	}
 
 	kprobeTCP := false
@@ -276,30 +285,134 @@ func main() {
 		}
 	}()
 
-	var event vista.Event
-	events := coll.Maps["events"]
-	runForever := flags.OutputLimitLines == 0
-	for i := flags.OutputLimitLines; i > 0 || runForever; i-- {
+	errg, ectx := errgroup.WithContext(ctx)
+
+	chEvent := make(chan vista.OutputEvent)
+	chPcap := make(chan vista.OutputEvent)
+	chans := vista.NewEventChannels(chEvent, chPcap)
+	counter := vista.NewOutputCounter(flags.OutputLimitLines)
+
+	errg.Go(func() error {
+		defer close(chEvent)
+
+		events := coll.Maps["events"]
+		return loopEvents(ectx, events, chEvent, counter)
+	})
+
+	errg.Go(func() error {
+		defer close(chPcap)
+
+		if !flags.HavePcap() {
+			return nil
+		}
+
+		events := coll.Maps["pcap_events"]
+		reader, err := perf.NewReaderWithOptions(events, 8192, perf.ReaderOptions{
+			Watermark: 1,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create perf reader: %w", err)
+		}
+
+		errg.Go(func() error {
+			<-ectx.Done()
+			_ = reader.Close()
+
+			return nil
+		})
+
+		return loopPcapEvents(ectx, reader, chPcap, counter)
+	})
+
+	errg.Go(func() error {
+		// Prevent to block event sending channels.
+		defer func() { go chans.Drain() }()
+
+		for ev := range chans.RecvChan() {
+			if !ev.IsPcap {
+				output.Print(ev.Event)
+			} else if err := output.Pcap(ev); err != nil {
+				return fmt.Errorf("failed to write pcap: %w", err)
+			}
+		}
+
+		return nil
+	})
+
+	err = errg.Wait()
+	if err != nil && !errors.Is(err, errFinished) {
+		log.Fatalf("Failed to run vista: %v", err)
+	}
+}
+
+var errFinished = errors.New("finished")
+
+func loopEvents(ctx context.Context, events *ebpf.Map, ch chan<- vista.OutputEvent, counter *vista.OutputCounter) error {
+	next := true
+	for next {
+		event := new(vista.Event)
+
 		for {
-			if err := events.LookupAndDelete(nil, &event); err == nil {
+			if err := events.LookupAndDelete(nil, event); err == nil {
 				break
 			} else if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				log.Fatalf("Failed to lookup event: %v", err)
+				return fmt.Errorf("failed to lookup event: %w", err)
 			}
 			select {
 			case <-ctx.Done():
-				return
+				return nil
 			case <-time.After(time.Microsecond):
 				continue
 			}
 		}
 
-		output.Print(&event)
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case ch <- vista.OutputEvent{
+			Event: event,
+		}:
+		}
+
+		next = counter.Next()
+	}
+
+	return errFinished
+}
+
+func loopPcapEvents(ctx context.Context, reader *perf.Reader, ch chan<- vista.OutputEvent, counter *vista.OutputCounter) error {
+	next := true
+	for next {
+		record, err := reader.Read()
+		if err != nil {
+			if errors.Is(err, perf.ErrClosed) {
+				return errFinished
+			}
+
+			return fmt.Errorf("failed to read perf record: %w", err)
+		}
+
+		if record.LostSamples > 0 {
+			log.Printf("Lost %d samples of pcap events\n", record.LostSamples)
+		}
+
+		raw := record.RawSample
+		event, err := vista.NewOutputEvent(raw, true)
+		if err != nil {
+			log.Printf("Failed to parse pcap event: %v\n", err)
+			continue
+		}
 
 		select {
 		case <-ctx.Done():
-			return
-		default:
+			return nil
+
+		case ch <- event:
 		}
+
+		next = counter.Next()
 	}
+
+	return errFinished
 }
