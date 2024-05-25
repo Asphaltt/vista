@@ -120,7 +120,7 @@ func (o *output) PrintHeader() {
 	o.buf.Reset()
 }
 
-func (o *output) Print(event *Event) {
+func (o *output) print(event *Event, extraMsg string) {
 	if o.flags.outputTs == outputTimestampAbsolute {
 		fmt.Fprintf(o.buf, "%12s ", time.Now().Format(absoluteTS))
 	}
@@ -157,14 +157,17 @@ func (o *output) Print(event *Event) {
 	switch event.Source {
 	case eventSourceIptables:
 		if o.flags.OutputIptables {
+			fmt.Fprintf(o.buf, "\nIPTABLES:")
 			outputIptables(o.buf, event.Iptables())
 		}
 	case eventSourceTCP:
 		if o.flags.OutputTCP {
+			fmt.Fprintf(o.buf, "\nTCP:")
 			outputTCP(o.buf, event.TCP())
 		}
 	case eventSourceSk:
 		if o.flags.OutputSk {
+			fmt.Fprintf(o.buf, "\nSOCK:")
 			outputSock(o.buf, event.Sock())
 		}
 	}
@@ -189,14 +192,21 @@ func (o *output) Print(event *Event) {
 		}
 	}
 
+	if extraMsg != "" {
+		fmt.Fprintf(o.buf, "\n%s", extraMsg)
+	}
+
 	fmt.Fprintln(o.writer, o.buf.String())
 
 	o.buf.Reset()
 }
 
+func (o *output) Print(event *Event) {
+	o.print(event, "")
+}
+
 func (o *output) Pcap(ev OutputEvent) error {
-	o.Print(ev.Event)
-	fmt.Fprintf(o.writer, "Saving this packet to %s\n", o.flags.PcapFile)
+	o.print(ev.Event, fmt.Sprintf("Saving this packet to %s..", o.flags.PcapFile))
 
 	iface := o.getIfaceName(ev.Event.Meta.Netns, ev.Event.Meta.Ifindex)
 	if err := o.pcap.writePacket(ev, iface); err != nil {

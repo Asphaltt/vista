@@ -134,6 +134,7 @@ func outputSock(w io.Writer, meta *SockMeta) {
 	outputSockCommon(w, meta)
 	outputSockInfo(w, meta)
 	if meta.WithSocket == 1 {
+		fmt.Fprintf(w, "\nSOCKET:")
 		outputSocketInfo(w, meta)
 	}
 }
