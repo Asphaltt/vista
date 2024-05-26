@@ -220,7 +220,11 @@ func main() {
 		})
 		defer t.Close()
 		traceTc = t.HaveTracing()
-		log.Println("Tracing tc progs..")
+		if traceTc {
+			log.Println("Tracing tc progs..")
+		} else {
+			log.Println("No tc-bpf progs found to trace!")
+		}
 	}
 
 	traceXdp := false
@@ -239,7 +243,11 @@ func main() {
 		})
 		defer t.Close()
 		traceXdp = t.HaveTracing()
-		log.Println("Tracing xdp progs..")
+		if traceXdp {
+			log.Println("Tracing xdp progs..")
+		} else {
+			log.Println("No xdp progs found to trace!")
+		}
 	}
 
 	kprobeIptables := false
