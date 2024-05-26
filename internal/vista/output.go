@@ -120,7 +120,7 @@ func (o *output) PrintHeader() {
 	o.buf.Reset()
 }
 
-func (o *output) print(event *Event, extraMsg string) {
+func (o *output) print(event *Event) {
 	if o.flags.outputTs == outputTimestampAbsolute {
 		fmt.Fprintf(o.buf, "%12s ", time.Now().Format(absoluteTS))
 	}
@@ -191,22 +191,23 @@ func (o *output) print(event *Event, extraMsg string) {
 			fmt.Fprintf(o.buf, "\n%s", string(str))
 		}
 	}
+}
 
-	if extraMsg != "" {
-		fmt.Fprintf(o.buf, "\n%s", extraMsg)
-	}
-
+func (o *output) flushBuffer() {
 	fmt.Fprintln(o.writer, o.buf.String())
 
 	o.buf.Reset()
 }
 
 func (o *output) Print(event *Event) {
-	o.print(event, "")
+	o.print(event)
+	o.flushBuffer()
 }
 
 func (o *output) Pcap(ev OutputEvent) error {
-	o.print(ev.Event, fmt.Sprintf("Saving this packet to %s..", o.flags.PcapFile))
+	o.print(ev.Event)
+	fmt.Fprintf(o.buf, "Saving this packet to %s..", o.flags.PcapFile)
+	o.flushBuffer()
 
 	iface := o.getIfaceName(ev.Event.Meta.Netns, ev.Event.Meta.Ifindex)
 	if err := o.pcap.writePacket(ev, iface); err != nil {
