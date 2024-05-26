@@ -152,7 +152,7 @@ func (t *tracing) traceProg(options *TracingOptions, prog *ebpf.Program, fentryN
 		t.addLink(tracing)
 	}
 
-	if !options.Pcap || slices.Contains(options.PcapModes, pcapModeExit) {
+	if options.Pcap && slices.Contains(options.PcapModes, pcapModeExit) {
 		tracing, err := link.AttachTracing(link.TracingOptions{
 			Program: coll.Programs[fexitName],
 		})
