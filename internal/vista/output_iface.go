@@ -107,7 +107,7 @@ func getIfacesInNetNs(path string) (map[uint32]string, error) {
 	return ifaces, nil
 }
 
-func (o *output) getIfaceName(netnsInode, ifindex uint32) string {
+func (o *Output) getIfaceName(netnsInode, ifindex uint32) string {
 	if ifaces, ok := o.ifaceCache[uint64(netnsInode)]; ok {
 		if name, ok := ifaces[ifindex]; ok {
 			return fmt.Sprintf("%d(%s)", ifindex, name)

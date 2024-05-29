@@ -77,6 +77,8 @@ type Flags struct {
 	ReadyFile string
 
 	KprobeBackend string
+
+	PerCPUBuffer uint
 }
 
 func (f *Flags) SetFlags() {
@@ -121,6 +123,8 @@ func (f *Flags) SetFlags() {
 
 	flag.StringVar(&f.KprobeBackend, "kprobe-backend", "",
 		fmt.Sprintf("Tracing backend('%s', '%s'). Will auto-detect if not specified.", BackendKprobe, BackendKprobeMulti))
+
+	flag.UintVar(&f.PerCPUBuffer, "output-percpu-buffer", 8192, "specified the buffer size for perf-event")
 
 	flag.StringVar(&f.FilterProto, "filter-protocol", "", "filter protocol, tcp, udp, icmp, empty for any")
 	flag.StringVar(&f.FilterAddr, "filter-addr", "", "filter IP address")

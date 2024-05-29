@@ -9,7 +9,7 @@ import (
 	"github.com/tklauser/ps"
 )
 
-func (o *output) getProcessExecName(event *Event) string {
+func (o *Output) getProcessExecName(event *Event) string {
 	var execName string
 	if event.PID != 0 {
 		if event.Source != eventSourceTCP {

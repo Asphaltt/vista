@@ -8,7 +8,7 @@ import (
 	"runtime"
 )
 
-func (o *output) getFuncName(event *Event) string {
+func (o *Output) getFuncName(event *Event) string {
 	var outFuncName string
 
 	switch event.Source {

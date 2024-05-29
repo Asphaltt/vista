@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
@@ -322,56 +321,24 @@ func main() {
 
 	errg, ectx := errgroup.WithContext(ctx)
 
-	chEvent := make(chan vista.OutputEvent)
-	chPcap := make(chan vista.OutputEvent)
-	chans := vista.NewEventChannels(chEvent, chPcap)
 	counter := vista.NewOutputCounter(flags.OutputLimitLines)
 
-	errg.Go(func() error {
-		defer close(chEvent)
-
-		events := coll.Maps["events"]
-		return loopEvents(ectx, events, chEvent, counter)
+	events := coll.Maps["events"]
+	reader, err := perf.NewReaderWithOptions(events, int(flags.PerCPUBuffer), perf.ReaderOptions{
+		Watermark: 1,
 	})
+	if err != nil {
+		log.Fatalf("Failed to create perf reader: %s", err)
+	}
 
 	errg.Go(func() error {
-		defer close(chPcap)
-
-		if !flags.HavePcap() {
-			return nil
-		}
-
-		events := coll.Maps["pcap_events"]
-		reader, err := perf.NewReaderWithOptions(events, 8192, perf.ReaderOptions{
-			Watermark: 1,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create perf reader: %w", err)
-		}
-
-		errg.Go(func() error {
-			<-ectx.Done()
-			_ = reader.Close()
-
-			return nil
-		})
-
-		return loopPcapEvents(ectx, reader, chPcap, counter)
-	})
-
-	errg.Go(func() error {
-		// Prevent to block event sending channels.
-		defer func() { go chans.Drain() }()
-
-		for ev := range chans.RecvChan() {
-			if !ev.IsPcap {
-				output.Print(ev.Event)
-			} else if err := output.Pcap(ev); err != nil {
-				return fmt.Errorf("failed to write pcap: %w", err)
-			}
-		}
-
+		<-ectx.Done()
+		_ = reader.Close()
 		return nil
+	})
+
+	errg.Go(func() error {
+		return loopEvents(ectx, reader, counter, output)
 	})
 
 	err = errg.Wait()
@@ -382,41 +349,7 @@ func main() {
 
 var errFinished = errors.New("finished")
 
-func loopEvents(ctx context.Context, events *ebpf.Map, ch chan<- vista.OutputEvent, counter *vista.OutputCounter) error {
-	next := true
-	for next {
-		event := new(vista.Event)
-
-		for {
-			if err := events.LookupAndDelete(nil, event); err == nil {
-				break
-			} else if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return fmt.Errorf("failed to lookup event: %w", err)
-			}
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(time.Microsecond):
-				continue
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-
-		case ch <- vista.OutputEvent{
-			Event: event,
-		}:
-		}
-
-		next = counter.Next()
-	}
-
-	return errFinished
-}
-
-func loopPcapEvents(ctx context.Context, reader *perf.Reader, ch chan<- vista.OutputEvent, counter *vista.OutputCounter) error {
+func loopEvents(ctx context.Context, reader *perf.Reader, counter *vista.OutputCounter, output *vista.Output) error {
 	next := true
 	for next {
 		record, err := reader.Read()
@@ -433,17 +366,16 @@ func loopPcapEvents(ctx context.Context, reader *perf.Reader, ch chan<- vista.Ou
 		}
 
 		raw := record.RawSample
-		event, err := vista.NewOutputEvent(raw, true)
+		event, err := vista.NewOutputEvent(raw)
 		if err != nil {
 			log.Printf("Failed to parse pcap event: %v\n", err)
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			return nil
-
-		case ch <- event:
+		if !event.IsPcap {
+			output.Print(event)
+		} else {
+			output.Pcap(event)
 		}
 
 		next = counter.Next()

@@ -139,6 +139,7 @@ enum event_source {
 	EVENT_SOURCE_SK = 1,
 	EVENT_SOURCE_IPTABLES = 2,
 	EVENT_SOURCE_TCP = 3,
+	EVENT_SOURCE_PCAP = 4,
 };
 
 struct event_t {
@@ -184,16 +185,9 @@ get_event(void) {
 	return event;
 }
 
-#define MAX_QUEUE_ENTRIES 10000
-struct {
-	__uint(type, BPF_MAP_TYPE_QUEUE);
-	__type(value, struct event_t);
-	__uint(max_entries, MAX_QUEUE_ENTRIES);
-} events SEC(".maps");
-
 struct {
 	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-} pcap_events SEC(".maps");
+} events SEC(".maps");
 
 #define MAX_TRACK_SIZE 1024
 struct {
@@ -482,7 +476,7 @@ kprobe_skb(struct sk_buff *skb, struct pt_regs *ctx, bool has_get_func_ip,
 	event->addr = has_get_func_ip ? bpf_get_func_ip(ctx) : PT_REGS_IP(ctx);
 	event->type = EVENT_TYPE_KPROBE;
 	event->source = EVENT_SOURCE_SKB;
-	bpf_map_push_elem(&events, event, BPF_EXIST);
+	bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
 
 	return BPF_OK;
 }
@@ -571,12 +565,11 @@ set_skb_pcap_meta(struct sk_buff *skb, struct pcap_meta *pcap, int action, bool 
 
 static __always_inline void
 output_skb_pcap_event(struct sk_buff *skb, struct event_t *event, int action, bool is_fexit) {
-	u64 flags;
-
+	event->source = EVENT_SOURCE_PCAP;
 	set_skb_pcap_meta(skb, &event->pcap, action, is_fexit);
 
-	flags = (((u64) event->pcap.cap_len) << 32) | BPF_F_CURRENT_CPU;
-	bpf_skb_output(skb, &pcap_events, flags, event, __sizeof_pcap_event);
+	u64 flags = (((u64) event->pcap.cap_len) << 32) | BPF_F_CURRENT_CPU;
+	bpf_skb_output(skb, &events, flags, event, __sizeof_pcap_event);
 }
 
 static __noinline void
@@ -594,7 +587,7 @@ handle_tc_skb(struct sk_buff *skb, void *ctx, int action, bool is_fexit, const b
 	event->source = EVENT_SOURCE_SKB;
 
 	if (!cfg->output_pcap) {
-		bpf_map_push_elem(&events, event, BPF_EXIST);
+		bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
 		return;
 	}
 
@@ -731,10 +724,11 @@ set_xdp_pcap_meta(struct xdp_buff *xdp, struct pcap_meta *pcap, u32 len, int act
 
 static __always_inline void
 output_xdp_pcap_event(struct xdp_buff *xdp, struct event_t *event, u32 len, int action, bool is_fexit) {
+	event->source = EVENT_SOURCE_PCAP;
 	set_xdp_pcap_meta(xdp, &event->pcap, len, action, is_fexit);
 
 	u64 flags = (((u64) event->pcap.cap_len) << 32) | BPF_F_CURRENT_CPU;
-	bpf_xdp_output(xdp, &pcap_events, flags, event, __sizeof_pcap_event);
+	bpf_xdp_output(xdp, &events, flags, event, __sizeof_pcap_event);
 }
 
 static __noinline void
@@ -759,7 +753,7 @@ handle_xdp_buff(struct xdp_buff *xdp, void *ctx, int verdict, bool is_fexit, con
 	event->source = EVENT_SOURCE_SKB;
 
 	if (!cfg->output_pcap) {
-		bpf_map_push_elem(&events, event, BPF_EXIST);
+		bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
 		return;
 	}
 
@@ -854,7 +848,7 @@ ipt_do_table_exit(struct pt_regs *ctx, uint verdict) {
 	event->addr = PT_REGS_IP(ctx);
 	event->type = EVENT_TYPE_KPROBE;
 	event->source = EVENT_SOURCE_IPTABLES;
-	bpf_map_push_elem(&events, event, BPF_EXIST);
+	bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
 
 	return BPF_OK;
 }
@@ -1021,7 +1015,7 @@ kprobe_sk(struct sock *sk, struct pt_regs *ctx, const bool has_get_func_ip) {
 	event->addr = has_get_func_ip ? bpf_get_func_ip(ctx) : PT_REGS_IP(ctx);
 	event->type = EVENT_TYPE_KPROBE;
 	event->source = EVENT_SOURCE_SK;
-	bpf_map_push_elem(&events, event, BPF_EXIST);
+	bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
 
 	return BPF_OK;
 }
@@ -1117,7 +1111,7 @@ output_tcp(void *ctx, struct sock *sk, struct event_t *event) {
 	event->skb_addr = (u64) sk;
 	event->type = EVENT_TYPE_KPROBE;
 	event->source = EVENT_SOURCE_TCP;
-	bpf_map_push_elem(&events, event, BPF_EXIST);
+	bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
 }
 
 SEC("kprobe/tcp_connect")

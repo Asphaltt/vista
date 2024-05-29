@@ -169,7 +169,7 @@ func (t *tracing) traceProg(options *TracingOptions, prog *ebpf.Program, fentryN
 func (t *tracing) trace(options *TracingOptions, fentryName, fexitName, fentryPcap, fexitPcap string) error {
 	progs, err := listBpfProgs(options.progType)
 	if err != nil {
-		log.Fatalf("failed to list bpf progs: %w", err)
+		log.Fatalf("failed to list bpf progs: %v", err)
 	}
 	defer func() {
 		for _, p := range progs {
@@ -196,9 +196,6 @@ func (t *tracing) trace(options *TracingOptions, fentryName, fexitName, fentryPc
 	}
 	if options.OutputSkb {
 		replacedMaps["print_skb_map"] = options.Coll.Maps["print_skb_map"]
-	}
-	if options.Pcap {
-		replacedMaps["pcap_events"] = options.Coll.Maps["pcap_events"]
 	}
 	options.Opts.MapReplacements = replacedMaps
 

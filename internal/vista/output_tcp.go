@@ -59,6 +59,6 @@ func outputTCP(w io.Writer, tcp *TCPMeta) {
 		time.Microsecond*time.Duration(tcp.Srtt), tcp.Retrans, tcp.SkMark,
 		nullStr(tcp.Cong[:]))
 	if tcp.Reset != 0 {
-		fmt.Fprintf(w, " reset=%s", tcp.Reset)
+		fmt.Fprintf(w, " reset=%d", tcp.Reset)
 	}
 }

@@ -29,9 +29,10 @@ const (
 	eventSourceSk       = 1
 	eventSourceIptables = 2
 	eventSourceTCP      = 3
+	eventSourcePcap     = 4
 )
 
-type output struct {
+type Output struct {
 	flags         *Flags
 	lastSeenSkb   map[uint64]uint64 // skb addr => last seen TS
 	printSkbMap   *ebpf.Map
@@ -47,7 +48,7 @@ type output struct {
 
 func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
 	addr2Name Addr2Name, kprobeMulti bool, btfSpec *btf.Spec,
-) (*output, error) {
+) (*Output, error) {
 	writer := os.Stdout
 
 	if flags.OutputFile != "" {
@@ -79,7 +80,7 @@ func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
 		}
 	}
 
-	return &output{
+	return &Output{
 		flags:         flags,
 		lastSeenSkb:   map[uint64]uint64{},
 		printSkbMap:   printSkbMap,
@@ -94,7 +95,7 @@ func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
 	}, nil
 }
 
-func (o *output) Close() {
+func (o *Output) Close() {
 	if o.writer != os.Stdout {
 		_ = o.writer.Sync()
 		_ = o.writer.Close()
@@ -105,7 +106,7 @@ func (o *output) Close() {
 	}
 }
 
-func (o *output) PrintHeader() {
+func (o *Output) PrintHeader() {
 	if o.flags.outputTs == outputTimestampAbsolute {
 		fmt.Fprintf(o.buf, "%12s ", "TIME")
 	}
@@ -120,7 +121,7 @@ func (o *output) PrintHeader() {
 	o.buf.Reset()
 }
 
-func (o *output) print(event *Event) {
+func (o *Output) print(event *Event) {
 	if o.flags.outputTs == outputTimestampAbsolute {
 		fmt.Fprintf(o.buf, "%12s ", time.Now().Format(absoluteTS))
 	}
@@ -193,20 +194,20 @@ func (o *output) print(event *Event) {
 	}
 }
 
-func (o *output) flushBuffer() {
+func (o *Output) flushBuffer() {
 	fmt.Fprintln(o.writer, o.buf.String())
 
 	o.buf.Reset()
 }
 
-func (o *output) Print(event *Event) {
-	o.print(event)
+func (o *Output) Print(ev OutputEvent) {
+	o.print(ev.Event)
 	o.flushBuffer()
 }
 
-func (o *output) Pcap(ev OutputEvent) error {
+func (o *Output) Pcap(ev OutputEvent) error {
 	o.print(ev.Event)
-	fmt.Fprintf(o.buf, "Saving this packet to %s..", o.flags.PcapFile)
+	fmt.Fprintf(o.buf, "\nSaving this packet to %s..", o.flags.PcapFile)
 	o.flushBuffer()
 
 	iface := o.getIfaceName(ev.Event.Meta.Netns, ev.Event.Meta.Ifindex)
