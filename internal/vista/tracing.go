@@ -143,7 +143,8 @@ func (t *tracing) traceProg(options *TracingOptions, prog *ebpf.Program, fentryN
 
 	if !options.Pcap || slices.Contains(options.PcapModes, pcapModeEntry) {
 		tracing, err := link.AttachTracing(link.TracingOptions{
-			Program: coll.Programs[fentryName],
+			Program:    coll.Programs[fentryName],
+			AttachType: ebpf.AttachTraceFEntry,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to attach tracing: %w", err)
@@ -154,7 +155,8 @@ func (t *tracing) traceProg(options *TracingOptions, prog *ebpf.Program, fentryN
 
 	if options.Pcap && slices.Contains(options.PcapModes, pcapModeExit) {
 		tracing, err := link.AttachTracing(link.TracingOptions{
-			Program: coll.Programs[fexitName],
+			Program:    coll.Programs[fexitName],
+			AttachType: ebpf.AttachTraceFExit,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to attach tracing: %w", err)
