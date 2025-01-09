@@ -36,7 +36,7 @@
 
 const static bool TRUE = true;
 
-volatile const static __u64 BPF_PROG_ADDR = 0;
+volatile const __u64 BPF_PROG_ADDR = 0;
 
 union addr {
 	u32 v4addr;
@@ -221,7 +221,7 @@ struct config {
 	u16 pad;
 } __packed;
 
-static volatile const struct config CFG;
+volatile const struct config CFG;
 #define cfg (&CFG)
 
 #define MAX_STACK_DEPTH 50

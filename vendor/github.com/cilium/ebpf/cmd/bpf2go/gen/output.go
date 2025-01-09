@@ -1,4 +1,4 @@
-package main
+package gen
 
 import (
 	"bytes"
@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"unicode"
+	"unicode/utf8"
 
-	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
+	b2gInt "github.com/cilium/ebpf/cmd/bpf2go/internal"
 	"github.com/cilium/ebpf/internal"
 )
 
@@ -47,6 +49,10 @@ func (n templateName) MapSpecs() string {
 	return string(n) + "MapSpecs"
 }
 
+func (n templateName) VariableSpecs() string {
+	return string(n) + "VariableSpecs"
+}
+
 func (n templateName) Load() string {
 	return n.maybeExport("load" + toUpperFirst(string(n)))
 }
@@ -63,6 +69,10 @@ func (n templateName) Maps() string {
 	return string(n) + "Maps"
 }
 
+func (n templateName) Variables() string {
+	return string(n) + "Variables"
+}
+
 func (n templateName) Programs() string {
 	return string(n) + "Programs"
 }
@@ -71,38 +81,70 @@ func (n templateName) CloseHelper() string {
 	return "_" + toUpperFirst(string(n)) + "Close"
 }
 
-type outputArgs struct {
+type GenerateArgs struct {
 	// Package of the resulting file.
-	pkg string
+	Package string
 	// The prefix of all names declared at the top-level.
-	stem string
-	// Build constraints included in the resulting file.
-	constraints constraint.Expr
+	Stem string
+	// Build Constraints included in the resulting file.
+	Constraints constraint.Expr
 	// Maps to be emitted.
-	maps []string
+	Maps []string
+	// Variables to be emitted.
+	Variables []string
 	// Programs to be emitted.
-	programs []string
+	Programs []string
 	// Types to be emitted.
-	types []btf.Type
-	// Filename of the ELF object to embed.
-	obj string
-	out io.Writer
+	Types []btf.Type
+	// Filename of the object to embed.
+	ObjectFile string
+	// Output to write template to.
+	Output io.Writer
+	// Function which transforms the input into a valid go identifier. Uses the default behaviour if nil
+	Identifier func(string) string
 }
 
-func output(args outputArgs) error {
+// Generate bindings for a BPF ELF file.
+func Generate(args GenerateArgs) error {
+	if args.Identifier == nil {
+		args.Identifier = internal.Identifier
+	}
+	if !token.IsIdentifier(args.Stem) {
+		return fmt.Errorf("%q is not a valid identifier", args.Stem)
+	}
+
+	if strings.ContainsAny(args.ObjectFile, "\n") {
+		// Prevent injecting newlines into the template.
+		return fmt.Errorf("file %q contains an invalid character", args.ObjectFile)
+	}
+
+	for _, typ := range args.Types {
+		if _, ok := btf.As[*btf.Datasec](typ); ok {
+			// Avoid emitting .rodata, .bss, etc. for now. We might want to
+			// name these types differently, etc.
+			return fmt.Errorf("can't output btf.Datasec: %s", typ)
+		}
+	}
+
 	maps := make(map[string]string)
-	for _, name := range args.maps {
-		maps[name] = internal.Identifier(name)
+	for _, name := range args.Maps {
+		maps[name] = args.Identifier(name)
+	}
+
+	variables := make(map[string]string)
+	for _, name := range args.Variables {
+		variables[name] = args.Identifier(name)
 	}
 
 	programs := make(map[string]string)
-	for _, name := range args.programs {
-		programs[name] = internal.Identifier(name)
+	for _, name := range args.Programs {
+		programs[name] = args.Identifier(name)
 	}
 
 	typeNames := make(map[btf.Type]string)
-	for _, typ := range args.types {
-		typeNames[typ] = args.stem + internal.Identifier(typ.TypeName())
+	for _, typ := range args.Types {
+		// NB: This also deduplicates types.
+		typeNames[typ] = args.Stem + args.Identifier(typ.TypeName())
 	}
 
 	// Ensure we don't have conflicting names and generate a sorted list of
@@ -112,11 +154,9 @@ func output(args outputArgs) error {
 		return err
 	}
 
-	module := currentModule()
-
 	gf := &btf.GoFormatter{
 		Names:      typeNames,
-		Identifier: internal.Identifier,
+		Identifier: args.Identifier,
 	}
 
 	ctx := struct {
@@ -126,21 +166,23 @@ func output(args outputArgs) error {
 		Constraints constraint.Expr
 		Name        templateName
 		Maps        map[string]string
+		Variables   map[string]string
 		Programs    map[string]string
 		Types       []btf.Type
 		TypeNames   map[btf.Type]string
 		File        string
 	}{
 		gf,
-		module,
-		args.pkg,
-		args.constraints,
-		templateName(args.stem),
+		b2gInt.CurrentModule,
+		args.Package,
+		args.Constraints,
+		templateName(args.Stem),
 		maps,
+		variables,
 		programs,
 		types,
 		typeNames,
-		args.obj,
+		args.ObjectFile,
 	}
 
 	var buf bytes.Buffer
@@ -148,74 +190,7 @@ func output(args outputArgs) error {
 		return fmt.Errorf("can't generate types: %s", err)
 	}
 
-	return internal.WriteFormatted(buf.Bytes(), args.out)
-}
-
-func collectFromSpec(spec *ebpf.CollectionSpec, cTypes []string, skipGlobalTypes bool) (maps, programs []string, types []btf.Type, _ error) {
-	for name := range spec.Maps {
-		// Skip .rodata, .data, .bss, etc. sections
-		if !strings.HasPrefix(name, ".") {
-			maps = append(maps, name)
-		}
-	}
-
-	for name := range spec.Programs {
-		programs = append(programs, name)
-	}
-
-	types, err := collectCTypes(spec.Types, cTypes)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("collect C types: %w", err)
-	}
-
-	// Collect map key and value types, unless we've been asked not to.
-	if skipGlobalTypes {
-		return maps, programs, types, nil
-	}
-
-	for _, typ := range collectMapTypes(spec.Maps) {
-		switch btf.UnderlyingType(typ).(type) {
-		case *btf.Datasec:
-			// Avoid emitting .rodata, .bss, etc. for now. We might want to
-			// name these types differently, etc.
-			continue
-
-		case *btf.Int:
-			// Don't emit primitive types by default.
-			continue
-		}
-
-		types = append(types, typ)
-	}
-
-	return maps, programs, types, nil
-}
-
-func collectCTypes(types *btf.Spec, names []string) ([]btf.Type, error) {
-	var result []btf.Type
-	for _, cType := range names {
-		typ, err := types.AnyTypeByName(cType)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, typ)
-	}
-	return result, nil
-}
-
-// collectMapTypes returns a list of all types used as map keys or values.
-func collectMapTypes(maps map[string]*ebpf.MapSpec) []btf.Type {
-	var result []btf.Type
-	for _, m := range maps {
-		if m.Key != nil && m.Key.TypeName() != "" {
-			result = append(result, m.Key)
-		}
-
-		if m.Value != nil && m.Value.TypeName() != "" {
-			result = append(result, m.Value)
-		}
-	}
-	return result
+	return internal.WriteFormatted(buf.Bytes(), args.Output)
 }
 
 // sortTypes returns a list of types sorted by their (generated) Go type name.
@@ -241,4 +216,9 @@ func sortTypes(typeNames map[btf.Type]string) ([]btf.Type, error) {
 	}
 
 	return types, nil
+}
+
+func toUpperFirst(str string) string {
+	first, n := utf8.DecodeRuneInString(str)
+	return string(unicode.ToUpper(first)) + str[n:]
 }

@@ -117,9 +117,7 @@ func (t *tracing) traceProg(options *TracingOptions, prog *ebpf.Program, fentryN
 	}
 
 	spec := options.Spec.Copy()
-	if err := spec.RewriteConstants(map[string]any{
-		"BPF_PROG_ADDR": addr,
-	}); err != nil {
+	if err := spec.Variables["BPF_PROG_ADDR"].Set(addr); err != nil {
 		return fmt.Errorf("failed to rewrite bpf prog addr: %w", err)
 	}
 

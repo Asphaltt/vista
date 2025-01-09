@@ -144,9 +144,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get vista config: %v", err)
 	}
-	if err := bpfSpec.RewriteConstants(map[string]interface{}{
-		"CFG": bpfConfig,
-	}); err != nil {
+	if err := bpfSpec.Variables["CFG"].Set(bpfConfig); err != nil {
 		log.Fatalf("Failed to rewrite config: %v", err)
 	}
 
@@ -184,8 +182,6 @@ func main() {
 
 	var opts ebpf.CollectionOptions
 	opts.Programs.KernelTypes = btfSpec
-	opts.Programs.LogLevel = ebpf.LogLevelInstruction
-	opts.Programs.LogSize = ebpf.DefaultVerifierLogSize * 100
 
 	coll, err := ebpf.NewCollectionWithOptions(bpfSpec, opts)
 	if err != nil {
