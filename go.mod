@@ -13,9 +13,9 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/tklauser/ps v0.0.2
 	github.com/vishvananda/netns v0.0.4
-	golang.org/x/net v0.25.0
+	golang.org/x/net v0.33.0
 	golang.org/x/sync v0.6.0
-	golang.org/x/sys v0.26.0
+	golang.org/x/sys v0.28.0
 )
 
 require (
