@@ -1,7 +1,7 @@
 module github.com/Asphaltt/vista
 
 go 1.22.3
-toolchain go1.23.7
+toolchain go1.24.1
 
 require (
 	github.com/blang/semver/v4 v4.0.0
@@ -14,9 +14,9 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/tklauser/ps v0.0.2
 	github.com/vishvananda/netns v0.0.4
-	golang.org/x/net v0.36.0
+	golang.org/x/net v0.38.0
 	golang.org/x/sync v0.6.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/sys v0.31.0
 )
 
 require (
